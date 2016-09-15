@@ -3,7 +3,8 @@ import numpy as np
 from tensorflow.examples.tutorials.mnist import input_data
 
 batch_size = 128
-test_size = 256
+test_size = 1000
+net_name = 'conv_net_3x3'
 
 def init_weights(shape):
     return tf.Variable(tf.random_normal(shape, stddev=0.01))
@@ -57,24 +58,37 @@ cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(py_x, Y))
 train_op = tf.train.RMSPropOptimizer(0.001, 0.9).minimize(cost)
 predict_op = tf.argmax(py_x, 1)
 
+prec = tf.reduce_mean(tf.cast(tf.equal(predict_op, tf.argmax(Y, 1)), tf.float32))
+
+summary_cost = tf.scalar_summary('cost', cost)
+summary_prec = tf.scalar_summary('prec', prec)
+
+train_writer = tf.train.SummaryWriter("logs/" + net_name + "/train", flush_secs=5)
+test_writer = tf.train.SummaryWriter("logs/" + net_name + "/test", flush_secs=5)
+
+sav = tf.train.Saver()
+
 # Launch the graph in a session
 with tf.Session() as sess:
     # you need to initialize all variables
     tf.initialize_all_variables().run()
 
+    k = 1
     for i in range(100):
         training_batch = zip(range(0, len(trX), batch_size),
                              range(batch_size, len(trX)+1, batch_size))
         for start, end in training_batch:
-            sess.run(train_op, feed_dict={X: trX[start:end], Y: trY[start:end],
+            log_cost, log_prec, val_prec, _ = sess.run([summary_cost, summary_prec, prec, train_op], feed_dict={X: trX[start:end], Y: trY[start:end],
                                           p_keep_conv: 0.8, p_keep_hidden: 0.5})
+            train_writer.add_summary(log_cost, k)
+            train_writer.add_summary(log_prec, k)
+            print(i, k, "train prec", val_prec)
+            k = k + 1
 
-        test_indices = np.arange(len(teX)) # Get A Test Batch
-        np.random.shuffle(test_indices)
-        test_indices = test_indices[0:test_size]
-
-        print(i, np.mean(np.argmax(teY[test_indices], axis=1) ==
-                         sess.run(predict_op, feed_dict={X: teX[test_indices],
-                                                         Y: teY[test_indices],
-                                                         p_keep_conv: 1.0,
-                                                         p_keep_hidden: 1.0})))
+        log_prec, val_prec = sess.run([summary_prec,prec], feed_dict={X: teX[:test_size],
+                                                                      Y: teY[:test_size],
+                                                                      p_keep_conv: 1.0,
+                                                                      p_keep_hidden: 1.0})
+        test_writer.add_summary(log_prec, k)
+        print(i, val_prec)
+        sav.save(sess, "checkpoints/" + net_name, global_step = i)
