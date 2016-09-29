@@ -6,7 +6,7 @@ batch_size = 128
 test_size = 1000
 
 donor_name = 'conv_net_3x3-61'
-acceptor_name = 'distil_L2-tst'
+acceptor_name = 'distil_comb_L2'
 
 def init_weights(shape):
     return tf.Variable(tf.random_normal(shape, stddev=0.01))
@@ -16,6 +16,8 @@ Y = tf.placeholder("float", [None, 10])
 
 p_keep_conv = tf.placeholder("float")
 p_keep_hidden = tf.placeholder("float")
+
+T = 1
 
 # lenet
 
@@ -52,7 +54,7 @@ def lenet4():
     w4 = init_weights([128 * 4 * 4, 625]) # FC 128 * 4 * 4 inputs, 625 outputs
     w_o = init_weights([625, 10])         # FC 625 inputs, 10 outputs (labels)
 
-    return tf.nn.softmax(lenet4_model(X, w, w2, w3, w4, w_o, p_keep_conv, p_keep_hidden)), [w,w2,w3,w4,w_o]
+    return tf.nn.softmax((1.0/T) * lenet4_model(X, w, w2, w3, w4, w_o, p_keep_conv, p_keep_hidden)), [w,w2,w3,w4,w_o]
 
 # fully-connected
 
@@ -67,16 +69,18 @@ def fully_connected():
     L1, fc_params1 = fc_layer(tf.reshape(X, [-1,784]) , 100, "L1")
     L1a = tf.nn.sigmoid(L1)
     res, fc_params2 = fc_layer(L1a , 10, "L2")
-    return tf.nn.softmax(res), fc_params1 + fc_params2
+    return tf.nn.softmax((1.0/T) * res), fc_params1 + fc_params2
 
-#donor & acceptor networks
+# donor & acceptor networks
 
 y_donor, donor_params = lenet4()
 y_acceptor, acceptor_params = fully_connected()
 
 # distillation
-cross_ent = tf.reduce_mean( - tf.reduce_sum(tf.stop_gradient(y_donor) * tf.log(y_acceptor), reduction_indices=1))
-distil_step = tf.train.GradientDescentOptimizer(0.1).minimize(cross_ent)
+distill_ent = tf.reduce_mean( - tf.reduce_sum(tf.stop_gradient(y_donor) * tf.log(y_acceptor), reduction_indices=1))
+truth_ent = tf.reduce_mean( - tf.reduce_sum(Y * tf.log(y_acceptor), reduction_indices=1))
+
+distil_step = tf.train.GradientDescentOptimizer(0.1).minimize(distill_ent + truth_ent)
 
 # Summaries
 
@@ -116,11 +120,12 @@ def distillate(net_name):
             training_batch = zip(range(0, len(trX), batch_size),
                                  range(batch_size, len(trX)+1, batch_size))
             for start, end in training_batch:
-                val_prec, val_donor_prec, log_summaries, val_cross_ent, _ = sess.run([acceptor_prec, donor_prec,  summaries, cross_ent, distil_step],
-                                                                                     feed_dict={X: trX[start:end],
-                                                                                                Y: trY[start:end],
-                                                                                                p_keep_conv: 1,
-                                                                                                p_keep_hidden: 1 })
+                val_prec, val_donor_prec, log_summaries, val_distil_ent, val_truth_ent, _ = sess.run(
+                    [acceptor_prec, donor_prec,  summaries, distill_ent, truth_ent, distil_step],
+                    feed_dict={X: trX[start:end],
+                               Y: trY[start:end],
+                               p_keep_conv: 1,
+                               p_keep_hidden: 1 })
 
                 test_val_prec, test_log_summaries = sess.run([acceptor_prec, summaries],
                                                              feed_dict={X: teX[:test_size],
@@ -130,7 +135,7 @@ def distillate(net_name):
 
                 distil_writer.add_summary(log_summaries, k)
                 distil_test_writer.add_summary(test_log_summaries, k)
-                print(i, k, 'distillation cross_ent:', val_cross_ent, 'donor_prec: ', val_donor_prec, '; train_prec', val_prec, '; test_prec', test_val_prec)
+                print(i, k, 'distillation distil_ent:', val_distil_ent, 'truth_ent', val_truth_ent, 'donor_prec: ', val_donor_prec, '; train_prec', val_prec, '; test_prec', test_val_prec)
 
                 k = k + 1
 
@@ -181,5 +186,5 @@ train_cross_ent = tf.reduce_mean( - tf.reduce_sum(Y * tf.log(y_acceptor), reduct
 train_prec = prec(y_acceptor)
 train_step = tf.train.GradientDescentOptimizer(0.1).minimize(train_cross_ent)
 
-#distillate(acceptor_name)
-train_net(train_step, train_prec, acceptor_params, "L2")
+distillate(acceptor_name)
+#train_net(train_step, train_prec, acceptor_params, "L2")
